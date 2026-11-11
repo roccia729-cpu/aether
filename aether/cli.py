@@ -122,18 +122,18 @@ def baseline_build(
 @baseline_app.command("show")
 def baseline_show():
     """Show info about the current baseline."""
-        try:
+    try:
         base = store.load()
     except store.BaselineError as exc:
         console.print(f"[red]Baseline error:[/] {exc}")
-        console.print("Prova a ricostruirla con: [bold]aether baseline build[/]")
+        console.print("Rebuild with: aether baseline build")
         raise typer.Exit(1)
 
     if base is None:
-        console.print("[red]No baseline found.[/] Run: [bold]aether baseline build[/]")
+        console.print("[red]No baseline found.[/]")
         raise typer.Exit(1)
-    terminal.render_baseline(base, config.db_path())
 
+    terminal.render_baseline(base, config.db_path())
 
 if __name__ == "__main__":
     app()
