@@ -72,5 +72,79 @@ def _volume(b: Baseline, events, since, until) -> list[Anomaly]:
     return out
 
 
-def _new_templates(b: Baseline, events, since, until) -> list[Anomaly]:
-    seen, errs, first, last, 
+def _new_templates(
+    b: Baseline,
+    events: list[Event],
+    since: datetime,
+    until: datetime
+) -> list[Anomaly]:
+    """
+    Detects log message templates that were never observed
+    in the historical baseline.
+    """
+
+    seen = Counter()
+    errors = Counter()
+    first = {}
+    last = {}
+
+    # Consider only events inside the requested time window
+    for event in events:
+        if not (since <= event.timestamp < until):
+            continue
+
+        template = event.template
+
+        # Ignore templates already present in the baseline
+        if template in b.templates:
+            continue
+
+        seen[template] += 1
+
+        if event.is_error:
+            errors[template] += 1
+
+        if template not in first:
+            first[template] = event.timestamp
+
+        last[template] = event.timestamp
+
+    anomalies = []
+
+    # Prioritize the most frequently observed new templates
+    for template, count in seen.most_common(MAX_NEW):
+
+        error_count = errors[template]
+
+        level = (
+            Level.CRITICAL
+            if error_count >= 5
+            else Level.WARNING
+        )
+
+        evidence = {
+            "template": template,
+            "occurrences": count,
+            "error_occurrences": error_count,
+            "first_seen": first[template].isoformat(),
+            "last_seen": last[template].isoformat(),
+            "baseline_occurrences": 0,
+        }
+
+        anomalies.append(
+            Anomaly(
+                kind="new_message",
+                level=level,
+                window_start=first[template],
+                window_end=last[template],
+                description=(
+                    f"New log template detected: "
+                    f"{template[:100]} "
+                    f"({count} occurrences, "
+                    f"{error_count} errors)"
+                ),
+                evidence=evidence,
+            )
+        )
+
+    return anomalies
