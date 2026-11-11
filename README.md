@@ -64,6 +64,7 @@ Each log line becomes an event (timestamp, source, severity, message, host). Num
 
 ## Current limitations
 - Linux only, single host
+- Hourly statistics are computed in the machine's local timezone. Behavior around DST transitions may be less precise.
 - Thresholds are heuristic and not yet configurable
 - The baseline groups by hour of day only (no weekday/weekend split, no per-service baselines)
 - Baseline should be built while the machine is healthy
