@@ -1,5 +1,7 @@
 # Aether
 
+<img width="1280" height="640" alt="image" src="https://github.com/user-attachments/assets/1a7f44f6-297b-4f26-a898-bc2235b08046" />
+
 Behavioral log analysis for Linux. Detects when a machine starts behaving differently.
 
 ## The problem
@@ -83,3 +85,4 @@ Pro (planned): longer baseline retention, JSON export, alerting, priority suppor
 
 ## License
 MIT
+
