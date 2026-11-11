@@ -1,350 +1,234 @@
+"""Anomaly detection: compare a recent window of events with the baseline."""
+
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+
 from ..baseline.builder import hour_floor
 from ..models import Anomaly, Baseline, Event, Level
-BIN = 300  # 5-minute windows for error bursts
-MAX_NEW = 15
-MAX_MISSING = 10
-# ============================================================
-# MAIN DETECTION ENGINE
-# ============================================================
+
+BIN_SECONDS = 300  # error bursts are counted in 5-minute bins
+BIN = BIN_SECONDS  # kept for backwards compatibility
+MAX_NEW = 15  # max "new message" anomalies per scan
+MAX_MISSING = 10  # max "missing message" anomalies per scan
+MIN_SPIKE_EVENTS = 10  # a volume spike needs at least this many events
+MIN_EXPECTED_MISSING = 10  # a message is "missing" only if >= this many were expected
+MIN_BURST_ERRORS = 5  # an error burst needs at least this many errors per bin
+
+
 def detect(
     baseline: Baseline,
     events: list[Event],
     since: datetime,
-    until: datetime
+    until: datetime,
 ) -> list[Anomaly]:
+    """Return anomalies found in [since, until), most severe first."""
     if until <= since:
         return []
-    # Analyze only events inside the requested time window.
-    events = [
-        event for event in events
-        if since <= event.timestamp < until
-    ]
+
+    events = [e for e in events if since <= e.timestamp < until]
+
     found: list[Anomaly] = []
-    found.extend(_volume(baseline, events, since, until))
-    found.extend(
-        _new_templates(baseline, events, since, until)
-    )
-    found.extend(
-        _missing_templates(baseline, events, since, until)
-    )
-    found.extend(
-        _error_bursts(baseline, events)
-    )
-    found.sort(
-        key=lambda anomaly: (
-            -anomaly.level.rank,
-            anomaly.window_start
-        )
-    )
+    found += _volume(baseline, events, since, until)
+    found += _new_templates(baseline, events, since, until)
+    found += _missing_templates(baseline, events, since, until)
+    found += _error_bursts(baseline, events)
+    found.sort(key=lambda a: (-a.level.rank, a.window_start))
     return found
-# ============================================================
-# VOLUME ANOMALIES
-# ============================================================
+
+
 def _volume(
-    b: Baseline,
-    events: list[Event],
-    since: datetime,
-    until: datetime
+    b: Baseline, events: list[Event], since: datetime, until: datetime
 ) -> list[Anomaly]:
-    """Detect unusual increases or decreases in log volume."""
-    counts = Counter(
-        hour_floor(event.timestamp)
-        for event in events
-    )
-    anomalies = []
+    """Unusual increase or decrease of log volume, hour by hour."""
+    counts = Counter(hour_floor(e.timestamp) for e in events)
+    out: list[Anomaly] = []
     cur = hour_floor(since)
+
     while cur < until:
         end = cur + timedelta(hours=1)
-        window_start = max(cur, since)
-        window_end = min(end, until)
-        duration_h = max(
-            (window_end - window_start).total_seconds() / 3600,
-            1e-6
-        )
+        w_start, w_end = max(cur, since), min(end, until)
+        hours = max((w_end - w_start).total_seconds() / 3600, 1e-6)
+        minutes = round(hours * 60)
+
         count = counts.get(cur, 0)
-        rate = count / duration_h
+        rate = count / hours
         hour = cur.astimezone().hour
-        mean = b.hourly_mean.get(
-            hour,
-            b.avg_per_hour
-        )
+        mean = b.hourly_mean.get(hour, b.avg_per_hour)
         std = b.hourly_std.get(hour, 0.0)
-        threshold = max(
-            mean + 3 * std,
-            mean * 3,
-            20
-        )
+        threshold = max(mean + 3 * std, mean * 3, 20)
+
         evidence = {
             "events": count,
-            "duration_min": round(duration_h * 60, 1),
+            "duration_min": minutes,
             "rate_per_hour": round(rate, 1),
-            "baseline_avg": round(mean, 1),
-            "threshold": round(threshold, 1),
+            "baseline_avg_per_hour": round(mean, 1),
+            "threshold_per_hour": round(threshold, 1),
         }
-        # Unusual increase in log volume.
-        if rate >= threshold:
-            level = (
-                Level.CRITICAL
-                if rate >= 2 * threshold
-                else Level.WARNING
-            )
-            anomalies.append(
+
+        if count >= MIN_SPIKE_EVENTS and rate >= threshold:
+            level = Level.CRITICAL if rate >= 2 * threshold else Level.WARNING
+            out.append(
                 Anomaly(
                     "volume_spike",
                     level,
-                    window_start,
-                    window_end,
-                    (
-                        f"Log volume spike: {count} events "
-                        f"in {duration_h * 60:.0f} minutes "
-                        f"(approximately {rate:.0f}/h)"
-                    ),
+                    w_start,
+                    w_end,
+                    f"Log volume spike: {count} events in {minutes} min "
+                    f"(~{rate:.0f}/h vs ~{mean:.0f}/h expected)",
                     evidence,
                 )
             )
-        # Unusual decrease in log volume.
-        elif duration_h >= 0.75 and mean >= 50 and rate < mean * 0.2:
-            anomalies.append(
+        elif hours >= 0.75 and mean >= 50 and rate < mean * 0.2:
+            out.append(
                 Anomaly(
                     "volume_drop",
                     Level.WARNING,
-                    window_start,
-                    window_end,
-                    (
-                        f"Log volume drop: {count} events "
-                        f"in {duration_h * 60:.0f} minutes "
-                        f"(approximately {rate:.0f}/h)"
-                    ),
+                    w_start,
+                    w_end,
+                    f"Log volume drop: {count} events in {minutes} min "
+                    f"(~{rate:.0f}/h vs ~{mean:.0f}/h expected)",
                     evidence,
                 )
             )
         cur = end
-    return anomalies
-# ============================================================
-# NEW MESSAGE TEMPLATES
-# ============================================================
+    return out
+
+
 def _new_templates(
-    b: Baseline,
-    events: list[Event],
-    since: datetime,
-    until: datetime
+    b: Baseline, events: list[Event], since: datetime, until: datetime
 ) -> list[Anomaly]:
-    """
-    Detect log message templates that were never
-    observed in the historical baseline.
-    """
-    seen = Counter()
-    errors = Counter()
-    first = {}
-    last = {}
-    for event in events:
-        if not (since <= event.timestamp < until):
+    """Message templates never seen in the baseline."""
+    seen: Counter = Counter()
+    errors: Counter = Counter()
+    first: dict[str, datetime] = {}
+    last: dict[str, datetime] = {}
+
+    for e in events:
+        if not (since <= e.timestamp < until):
             continue
-        template = event.template
-        # Ignore known templates.
-        if template in b.templates:
+        t = e.template
+        if t in b.templates:
             continue
-        seen[template] += 1
-        if event.is_error:
-            errors[template] += 1
-        if template not in first:
-            first[template] = event.timestamp
-        last[template] = event.timestamp
-    anomalies = []
-    for template, count in seen.most_common(MAX_NEW):
-        error_count = errors[template]
-        level = (
-            Level.CRITICAL
-            if error_count >= 5
-            else Level.WARNING
-        )
-        evidence = {
-            "template": template,
-            "occurrences": count,
-            "error_occurrences": error_count,
-            "first_seen": first[template].isoformat(),
-            "last_seen": last[template].isoformat(),
-            "baseline_occurrences": 0,
-        }
-        anomalies.append(
+        seen[t] += 1
+        if e.is_error:
+            errors[t] += 1
+        # min/max: events may arrive out of order (e.g. several log files)
+        first[t] = min(first.get(t, e.timestamp), e.timestamp)
+        last[t] = max(last.get(t, e.timestamp), e.timestamp)
+
+    out: list[Anomaly] = []
+    for t, n in seen.most_common(MAX_NEW):
+        n_err = errors[t]
+        if n_err >= 5:
+            level = Level.CRITICAL
+        elif n_err > 0 or n >= 10:
+            level = Level.WARNING
+        else:
+            level = Level.INFO
+        out.append(
             Anomaly(
-                kind="new_message",
-                level=level,
-                window_start=first[template],
-                window_end=last[template],
-                description=(
-                    f"New log template detected: "
-                    f"{template[:100]} "
-                    f"({count} occurrences, "
-                    f"{error_count} errors)"
-                ),
-                evidence=evidence,
+                "new_message",
+                level,
+                first[t],
+                last[t],
+                f"New message never seen in baseline: {t[:100]} "
+                f"({n} times, {n_err} errors)",
+                {
+                    "template": t,
+                    "occurrences": n,
+                    "error_occurrences": n_err,
+                    "first_seen": first[t].isoformat(timespec="seconds"),
+                    "last_seen": last[t].isoformat(timespec="seconds"),
+                },
             )
         )
-    return anomalies
-# ============================================================
-# MISSING MESSAGE TEMPLATES
-# ============================================================
+    return out
+
+
 def _missing_templates(
-    b: Baseline,
-    events: list[Event],
-    since: datetime,
-    until: datetime
+    b: Baseline, events: list[Event], since: datetime, until: datetime
 ) -> list[Anomaly]:
-    """
-    Detect normally recurring log templates that
-    unexpectedly disappear from the observation window.
-    """
-    if until <= since:
+    """Frequent baseline messages that did not appear at all in the window."""
+    hours = (until - since).total_seconds() / 3600
+    if hours <= 0 or b.window_hours <= 0:
         return []
-    # Count currently observed templates.
-    observed = Counter(
-        event.template
-        for event in events
-        if since <= event.timestamp < until
-    )
-    # Actual observation duration.
-    window_hours = (
-        until - since
-    ).total_seconds() / 3600
-    # Historical baseline duration.
-    baseline_hours = b.window_hours
-    if baseline_hours <= 0:
+
+    present = {e.template for e in events}
+    candidates: list[tuple[float, str, int]] = []
+    for t, count in b.templates.items():
+        if count <= 0 or t in present:
+            continue
+        expected = count / b.window_hours * hours
+        if expected >= MIN_EXPECTED_MISSING:
+            candidates.append((expected, t, count))
+    candidates.sort(reverse=True)
+
+    return [
+        Anomaly(
+            "missing_message",
+            Level.WARNING,
+            since,
+            until,
+            f"Expected message disappeared: {t[:100]} "
+            f"(~{expected:.0f} expected, 0 seen)",
+            {
+                "template": t,
+                "expected_in_window": round(expected, 1),
+                "baseline_count": count,
+                "baseline_hours": round(b.window_hours, 1),
+                "observation_hours": round(hours, 2),
+                "seen": 0,
+            },
+        )
+        for expected, t, count in candidates[:MAX_MISSING]
+    ]
+
+
+def _error_bursts(b: Baseline, events: list[Event]) -> list[Anomaly]:
+    """Concentrations of errors in short windows; adjacent hot bins are merged."""
+    bins: dict[int, list[Event]] = defaultdict(list)
+    for e in events:
+        if e.is_error:
+            bins[int(e.timestamp.timestamp() // BIN_SECONDS)].append(e)
+    if not bins:
         return []
-    missing = []
-    for template, historical_count in b.templates.items():
-        if historical_count <= 0:
-            continue
-        # Expected occurrences in the current window.
-        expected = (
-            historical_count / baseline_hours
-        ) * window_hours
-        actual = observed.get(template, 0)
-        # Ignore infrequent templates.
-        if expected < 3:
-            continue
-        # Template is still present.
-        if actual > 0:
-            continue
-        missing.append({
-            "template": template,
-            "expected": round(expected, 2),
-            "actual": actual,
-        })
-    # Highest expected frequency first.
-    missing.sort(
-        key=lambda item: item["expected"],
-        reverse=True
-    )
-    anomalies = []
-    for item in missing[:MAX_MISSING]:
-        template = item["template"]
-        expected = item["expected"]
-        evidence = {
-            "template": template,
-            "expected_occurrences": expected,
-            "actual_occurrences": 0,
-            "baseline_occurrences": b.templates[template],
-            "baseline_hours": baseline_hours,
-            "observation_hours": round(window_hours, 2),
-        }
-        anomalies.append(
+
+    rate_per_hour = b.error_total / b.window_hours
+    expected = rate_per_hour * BIN_SECONDS / 3600
+    threshold = max(MIN_BURST_ERRORS, expected * 3)
+
+    groups: list[list[int]] = []
+    for k in sorted(k for k, v in bins.items() if len(v) >= threshold):
+        if groups and k == groups[-1][-1] + 1:
+            groups[-1].append(k)
+        else:
+            groups.append([k])
+
+    out: list[Anomaly] = []
+    for g in groups:
+        evs = [e for k in g for e in bins[k]]
+        total = len(evs)
+        peak = max(len(bins[k]) for k in g)
+        start = min(e.timestamp for e in evs)
+        end = max(e.timestamp for e in evs)
+        minutes = max(1, round((end - start).total_seconds() / 60))
+        level = Level.CRITICAL if peak >= 4 * threshold else Level.WARNING
+        services = Counter(e.source for e in evs).most_common(5)
+        out.append(
             Anomaly(
-                kind="missing_message",
-                level=Level.WARNING,
-                window_start=since,
-                window_end=until,
-                description=(
-                    f"Expected log template disappeared: "
-                    f"{template[:100]} "
-                    f"(expected approximately {expected} occurrences)"
-                ),
-                evidence=evidence,
+                "error_burst",
+                level,
+                start,
+                end,
+                f"Error burst: {total} errors in {minutes} min "
+                f"(peak {peak} per 5 min, ~{expected:.1f} expected)",
+                {
+                    "errors": total,
+                    "peak_per_5min": peak,
+                    "baseline_per_5min": round(expected, 2),
+                    "threshold_per_5min": round(threshold, 1),
+                    "affected_services": dict(services),
+                },
             )
         )
-    return anomalies
-# ============================================================
-# ERROR BURST DETECTION
-# ============================================================
-def _error_bursts(
-    b: Baseline,
-    events: list[Event]
-) -> list[Anomaly]:
-    """
-    Detect unusual concentrations of error events
-    inside short time windows.
-    """
-    buckets = defaultdict(list)
-    # Group errors into fixed 5-minute windows.
-    for event in events:
-        if not event.is_error:
-            continue
-        timestamp = event.timestamp.timestamp()
-        bucket = int(timestamp // BIN)
-        buckets[bucket].append(event)
-    anomalies = []
-    # Historical error rate per hour.
-    baseline_hours = b.window_hours
-    if baseline_hours <= 0:
-        return []
-    historical_error_rate = (
-        b.error_total / baseline_hours
-    )
-    # Expected errors in a 5-minute window.
-    expected_errors = (
-        historical_error_rate * BIN / 3600
-    )
-    # Minimum threshold avoids alerts for isolated errors.
-    threshold = max(
-        5,
-        expected_errors * 3
-    )
-    for bucket, bucket_events in buckets.items():
-        count = len(bucket_events)
-        if count < threshold:
-            continue
-        timestamps = [
-            event.timestamp
-            for event in bucket_events
-        ]
-        window_start = min(timestamps)
-        window_end = max(timestamps)
-        level = (
-            Level.CRITICAL
-            if count >= threshold * 2
-            else Level.WARNING
-        )
-        # Identify affected services.
-        services = Counter(
-            event.source
-            for event in bucket_events
-        )
-        evidence = {
-            "error_count": count,
-            "baseline_expected": round(expected_errors, 2),
-            "threshold": round(threshold, 2),
-            "baseline_error_rate": round(
-                historical_error_rate,
-                2
-            ),
-            "window_seconds": BIN,
-            "affected_services": dict(services),
-        }
-        anomalies.append(
-            Anomaly(
-                kind="error_burst",
-                level=level,
-                window_start=window_start,
-                window_end=window_end,
-                description=(
-                    f"Error burst detected: {count} errors "
-                    f"within a {BIN // 60}-minute window "
-                    f"(historical expectation: "
-                    f"{expected_errors:.2f})"
-                ),
-                evidence=evidence,
-            )
-        )
-    return anomalies
+    return out
