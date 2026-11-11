@@ -57,4 +57,63 @@ def scan(
     export_path: Optional[Path] = typer.Option(None, "--export", help="Export JSON report (Pro)."),
 ):
     """Analyze recent logs against the baseline and print a report."""
-    
+    if export_path and not licensing.is_pro():
+        console.print("[yellow]--export is a Pro feature.[/]")
+        raise typer.Exit(1)
+    base = store.load()
+    if base is None:
+        console.print("[red]No baseline found.[/] Run: [bold]aether baseline build[/]")
+        raise typer.Exit(1)
+    start = time.perf_counter()
+    until = datetime.now().astimezone()
+    since = until - timedelta(hours=hours)
+    events = _collect(since, until, source, files)
+    if not events:
+        console.print("[yellow]No events found in the window (permissions? try sudo).[/]")
+        raise typer.Exit(1)
+    anomalies = detect(base, events, since, until)
+    terminal.render_scan(anomalies, len(events), time.perf_counter() - start, since, until)
+    if export_path:
+        export.to_json(anomalies, export_path)
+        console.print(f"[green]Exported to {export_path}[/]")
+
+
+@baseline_app.command("build")
+def baseline_build(
+    hours: int = typer.Option(config.DEFAULT_PERIOD_HOURS, "--hours", "-h", help="Baseline period."),
+    source: str = SourceOpt,
+    files: Optional[List[Path]] = FilesOpt,
+):
+    """Build (or rebuild) the baseline from recent logs."""
+    if hours > licensing.FREE_MAX_BASELINE_HOURS and not licensing.is_pro():
+        console.print(
+            f"[yellow]Free edition: baseline up to {licensing.FREE_MAX_BASELINE_HOURS}h. "
+            "Longer retention is Pro.[/]"
+        )
+        raise typer.Exit(1)
+    until = datetime.now().astimezone()
+    since = until - timedelta(hours=hours)
+    events = _collect(since, until, source, files)
+    if not events:
+        console.print("[yellow]No events found: cannot build baseline (permissions? try sudo).[/]")
+        raise typer.Exit(1)
+    base = builder.build_baseline(events, since, until, hours)
+    path = store.save(base)
+    console.print("[green]Baseline saved.[/]")
+    terminal.render_baseline(base, path)
+
+
+@baseline_app.command("show")
+def baseline_show():
+    """Show info about the current baseline."""
+    base = store.load()
+    if base is None:
+        console.print("[red]No baseline found.[/] Run: [bold]aether baseline build[/]")
+        raise typer.Exit(1)
+    terminal.render_baseline(base, config.db_path())
+
+
+if __name__ == "__main__":
+    app()
+
+      
