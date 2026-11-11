@@ -12,10 +12,26 @@ CREATE TABLE IF NOT EXISTS templates (template TEXT PRIMARY KEY, count INTEGER);
 """
 
 
+def _ensure_secure_dir(path: Path) -> None:
+    """Crea la directory con permessi 0700 e, se esiste già, li forza."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass  # su alcuni filesystem/FS remoti può fallire
+
+
 def _connect(path: Path) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_secure_dir(path.parent)
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
+
+    # Forza permessi 0600 sul database
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
     return conn
 
 
