@@ -88,6 +88,9 @@ def baseline_build(
     files: Optional[List[Path]] = FilesOpt,
 ):
     """Build (or rebuild) the baseline from recent logs."""
+    if hours < 1:
+        console.print("[red]Error:[/] --hours must be >= 1")
+        raise typer.Exit(1)
     if hours > licensing.FREE_MAX_BASELINE_HOURS and not licensing.is_pro():
         console.print(
             f"[yellow]Free edition: baseline up to {licensing.FREE_MAX_BASELINE_HOURS}h. "
