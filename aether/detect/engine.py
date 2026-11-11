@@ -2,7 +2,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from ..baseline.builder import hour_floor
-from ..models import Anomaly, Baseline, Event, Level
+from ..models import Anomaly, Baseline, Event, Level, normalize_message
 
 BIN = 300  # seconds, for error bursts
 MAX_NEW = 15
