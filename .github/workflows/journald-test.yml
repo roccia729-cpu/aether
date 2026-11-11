@@ -1,0 +1,28 @@
+name: journald-test
+on: workflow_dispatch
+
+jobs:
+  journald:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - name: tests
+        run: pytest -q
+      - name: journald check
+        run: sudo journalctl -o json --no-pager -n 2 | head -c 600
+      - name: normal activity
+        run: |
+          for i in $(seq 1 60); do logger -t myapp "heartbeat $i ok"; done
+          sleep 3
+      - name: build baseline
+        run: sudo "$(which aether)" baseline build --hours 1 --source journald
+      - name: incident
+        run: |
+          for i in $(seq 1 40); do logger -p user.err -t myapp "disk failure on sda"; done
+          sleep 3
+      - name: scan
+        run: sudo "$(which aether)" scan --hours 1 --source journald
