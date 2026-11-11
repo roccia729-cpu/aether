@@ -53,7 +53,8 @@ def _new_templates(b: Baseline, events, since, until) -> list[Anomaly]:
         errs[t] += int(e.is_error)
         first[t] = min(first.get(t, e.timestamp), e.timestamp)  
         last[t] = max(last.get(t, e.timestamp), e.timestamp)
-        sample.setdefault(t, e.message)
+        sample.setdefault(t, normalize_message(e.message))
+
     out = []
     for t, n in seen.most_common(MAX_NEW):
         level = Level.WARNING if errs[t] or n >= 10 else Level.INFO
