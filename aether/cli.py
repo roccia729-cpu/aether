@@ -63,10 +63,17 @@ def scan(
     if export_path and not licensing.is_pro():
         console.print("[yellow]--export is a Pro feature.[/]")
         raise typer.Exit(1)
-    base = store.load()
+       try:
+        base = store.load()
+    except store.BaselineError as exc:
+        console.print(f"[red]Baseline error:[/] {exc}")
+        console.print("Prova a ricostruirla con: [bold]aether baseline build[/]")
+        raise typer.Exit(1)
+
     if base is None:
         console.print("[red]No baseline found.[/] Run: [bold]aether baseline build[/]")
         raise typer.Exit(1)
+    
     start = time.perf_counter()
     until = datetime.now().astimezone()
     since = until - timedelta(hours=hours)
@@ -112,7 +119,13 @@ def baseline_build(
 @baseline_app.command("show")
 def baseline_show():
     """Show info about the current baseline."""
-    base = store.load()
+        try:
+        base = store.load()
+    except store.BaselineError as exc:
+        console.print(f"[red]Baseline error:[/] {exc}")
+        console.print("Prova a ricostruirla con: [bold]aether baseline build[/]")
+        raise typer.Exit(1)
+
     if base is None:
         console.print("[red]No baseline found.[/] Run: [bold]aether baseline build[/]")
         raise typer.Exit(1)
