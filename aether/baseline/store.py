@@ -61,27 +61,41 @@ def save(b: Baseline, path: Path | None = None) -> Path:
     return path
 
 
+class BaselineError(Exception):
+    """Baseline corrotta o non leggibile."""
+
+
 def load(path: Path | None = None) -> Baseline | None:
     path = Path(path) if path else config.db_path()
     if not path.exists():
         return None
-    conn = _connect(path)
+
     try:
-        meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
-        if not meta:
-            return None
-        hourly = conn.execute("SELECT hour, mean, std FROM hourly").fetchall()
-        templates = dict(conn.execute("SELECT template, count FROM templates").fetchall())
-    finally:
-        conn.close()
-    return Baseline(
-        created_at=datetime.fromisoformat(meta["created_at"]),
-        period_hours=int(meta["period_hours"]),
-        window_start=datetime.fromisoformat(meta["window_start"]),
-        window_end=datetime.fromisoformat(meta["window_end"]),
-        total_events=int(meta["total_events"]),
-        error_total=int(meta["error_total"]),
-        hourly_mean={h: m for h, m, _ in hourly},
-        hourly_std={h: s for h, _, s in hourly},
-        templates=templates,
-    )
+        conn = _connect(path)
+        try:
+            meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+            if not meta:
+                return None
+
+            required = {"created_at", "period_hours", "window_start", "window_end", "total_events", "error_total"}
+            if not required.issubset(meta.keys()):
+                raise BaselineError("Baseline metadata incompleti o corrotti")
+
+            hourly = conn.execute("SELECT hour, mean, std FROM hourly").fetchall()
+            templates = dict(conn.execute("SELECT template, count FROM templates").fetchall())
+        finally:
+            conn.close()
+
+        return Baseline(
+            created_at=datetime.fromisoformat(meta["created_at"]),
+            period_hours=int(meta["period_hours"]),
+            window_start=datetime.fromisoformat(meta["window_start"]),
+            window_end=datetime.fromisoformat(meta["window_end"]),
+            total_events=int(meta["total_events"]),
+            error_total=int(meta["error_total"]),
+            hourly_mean={h: m for h, m, _ in hourly},
+            hourly_std={h: s for h, _, s in hourly},
+            templates=templates,
+        )
+    except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+        raise BaselineError(f"Impossibile leggere la baseline: {exc}") from exc
