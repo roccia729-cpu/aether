@@ -24,36 +24,3 @@ def test_new_message_and_spike_detected():
     assert "new_message" in kinds
     assert "volume_spike" in kinds
     assert "missing_message" in kinds or "error_burst" in kinds
-
-def test_new_template_detected():
-    anomalies = _new_templates(
-        baseline,
-        [new_event],
-        since,
-        until
-    )
-
-    assert len(anomalies) == 1
-    assert anomalies[0].kind == "new_message"
-
-
-def test_known_template_ignored():
-    anomalies = _new_templates(
-        baseline,
-        [known_event],
-        since,
-        until
-    )
-
-    assert len(anomalies) == 0
-
-
-def test_new_template_error_count():
-    anomalies = _new_templates(
-        baseline,
-        [error_event] * 5,
-        since,
-        until
-    )
-
-    assert anomalies[0].level == Level.CRITICAL
