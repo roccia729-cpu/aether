@@ -51,9 +51,8 @@ def _new_templates(b: Baseline, events, since, until) -> list[Anomaly]:
             continue
         seen[t] += 1
         errs[t] += int(e.is_error)
-                first[t] = min(first.get(t, e.timestamp), e.timestamp)
+        first[t] = min(first.get(t, e.timestamp), e.timestamp)  
         last[t] = max(last.get(t, e.timestamp), e.timestamp)
-
         sample.setdefault(t, e.message)
     out = []
     for t, n in seen.most_common(MAX_NEW):
