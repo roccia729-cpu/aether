@@ -48,7 +48,6 @@ def _collect(since, until, source, files):
         console.print(f"[red]Error:[/] {exc}")
         raise typer.Exit(1)
 
-
 @app.command()
 def scan(
     hours: int = typer.Option(config.DEFAULT_SCAN_HOURS, "--hours", "-h", help="Recent window to analyze."),
@@ -57,13 +56,15 @@ def scan(
     export_path: Optional[Path] = typer.Option(None, "--export", help="Export JSON report (Pro)."),
 ):
     """Analyze recent logs against the baseline and print a report."""
-        if hours < 1:
+    if hours < 1:
         console.print("[red]Error:[/] --hours must be >= 1")
         raise typer.Exit(1)
+
     if export_path and not licensing.is_pro():
         console.print("[yellow]--export is a Pro feature.[/]")
         raise typer.Exit(1)
-       try:
+
+    try:
         base = store.load()
     except store.BaselineError as exc:
         console.print(f"[red]Baseline error:[/] {exc}")
@@ -73,7 +74,7 @@ def scan(
     if base is None:
         console.print("[red]No baseline found.[/] Run: [bold]aether baseline build[/]")
         raise typer.Exit(1)
-    
+
     start = time.perf_counter()
     until = datetime.now().astimezone()
     since = until - timedelta(hours=hours)
@@ -81,8 +82,10 @@ def scan(
     if not events:
         console.print("[yellow]No events found in the window (permissions? try sudo).[/]")
         raise typer.Exit(1)
+
     anomalies = detect(base, events, since, until)
     terminal.render_scan(anomalies, len(events), time.perf_counter() - start, since, until)
+
     if export_path:
         export.to_json(anomalies, export_path)
         console.print(f"[green]Exported to {export_path}[/]")
