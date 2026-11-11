@@ -1,1 +1,13 @@
+[project]
+name = "aether"
+version = "0.1.0"
+description = "Behavioral log analysis for Linux systems"
+authors = [{name = "Roccia"}]
+requires-python = ">=3.11"
+dependencies = [
+    "typer",
+    "rich"
+]
 
+[project.scripts]
+aether = "aether.cli:app"
