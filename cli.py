@@ -6,12 +6,12 @@ from typing import List, Optional
 import typer
 from rich.console import Console
 
-from . import __version__, config
+from . import __version__, config, licensing
 from .baseline import builder, store
 from .detect.engine import detect
 from .ingest import collect
 from .ingest.journald import JournalError
-from .report import terminal
+from .report import export, terminal
 
 app = typer.Typer(
     help="Aether: behavioral log analysis for Linux.",
@@ -54,51 +54,7 @@ def scan(
     hours: int = typer.Option(config.DEFAULT_SCAN_HOURS, "--hours", "-h", help="Recent window to analyze."),
     source: str = SourceOpt,
     files: Optional[List[Path]] = FilesOpt,
+    export_path: Optional[Path] = typer.Option(None, "--export", help="Export JSON report (Pro)."),
 ):
     """Analyze recent logs against the baseline and print a report."""
-    base = store.load()
-    if base is None:
-        console.print("[red]No baseline found.[/] Run: [bold]aether baseline build[/]")
-        raise typer.Exit(1)
-    start = time.perf_counter()
-    until = datetime.now().astimezone()
-    since = until - timedelta(hours=hours)
-    events = _collect(since, until, source, files)
-    if not events:
-        console.print("[yellow]No events found in the window (permissions? try sudo).[/]")
-        raise typer.Exit(1)
-    anomalies = detect(base, events, since, until)
-    terminal.render_scan(anomalies, len(events), time.perf_counter() - start, since, until)
-
-
-@baseline_app.command("build")
-def baseline_build(
-    hours: int = typer.Option(config.DEFAULT_PERIOD_HOURS, "--hours", "-h", help="Baseline period."),
-    source: str = SourceOpt,
-    files: Optional[List[Path]] = FilesOpt,
-):
-    """Build (or rebuild) the baseline from recent logs."""
-    until = datetime.now().astimezone()
-    since = until - timedelta(hours=hours)
-    events = _collect(since, until, source, files)
-    if not events:
-        console.print("[yellow]No events found: cannot build baseline (permissions? try sudo).[/]")
-        raise typer.Exit(1)
-    base = builder.build_baseline(events, since, until, hours)
-    path = store.save(base)
-    console.print("[green]Baseline saved.[/]")
-    terminal.render_baseline(base, path)
-
-
-@baseline_app.command("show")
-def baseline_show():
-    """Show info about the current baseline."""
-    base = store.load()
-    if base is None:
-        console.print("[red]No baseline found.[/] Run: [bold]aether baseline build[/]")
-        raise typer.Exit(1)
-    terminal.render_baseline(base, config.db_path())
-
-
-if __name__ == "__main__":
-    app()
+    
