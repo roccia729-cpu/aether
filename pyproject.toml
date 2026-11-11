@@ -16,3 +16,9 @@ aether = "aether.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["aether*"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
