@@ -57,6 +57,9 @@ def scan(
     export_path: Optional[Path] = typer.Option(None, "--export", help="Export JSON report (Pro)."),
 ):
     """Analyze recent logs against the baseline and print a report."""
+        if hours < 1:
+        console.print("[red]Error:[/] --hours must be >= 1")
+        raise typer.Exit(1)
     if export_path and not licensing.is_pro():
         console.print("[yellow]--export is a Pro feature.[/]")
         raise typer.Exit(1)
