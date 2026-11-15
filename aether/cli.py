@@ -21,6 +21,7 @@ app = typer.Typer(
 )
 baseline_app = typer.Typer(help="Manage the behavioral baseline.", no_args_is_help=True)
 app.add_typer(baseline_app, name="baseline")
+app.add_typer(agents_app, name="agents")
 console = Console()
 
 SourceOpt = typer.Option("auto", "--source", "-s", help="auto | journald | files")
