@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 
 from . import __version__, config, licensing
+from .agents_cli import agents_app
 from .baseline import builder, store
 from .detect.engine import detect
 from .ingest import collect
